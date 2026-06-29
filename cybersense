@@ -1,0 +1,60 @@
+package main
+
+import (
+	"crypto/tls"
+	"fmt"
+	"net"
+	"sync"
+	"time"
+)
+
+func worker(id int, jobs <-chan string, results chan<- string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for domain := range jobs {
+		address := domain + ":443"
+		conn, err := net.DialTimeout("tcp", address, 3*time.Second)
+		if err != nil {
+			results <- fmt.Sprintf("[-] %s: Non raggiungibile (%v)", domain, err)
+			continue
+		}
+		
+		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+		err = tlsConn.Handshake()
+		if err != nil {
+			conn.Close()
+			results <- fmt.Sprintf("[-] %s: Errore TLS (%v)", domain, err)
+			continue
+		}
+		tlsConn.Close()
+		results <- fmt.Sprintf("[+] %s: HTTPS Ok", domain)
+	}
+}
+
+func main() {
+	// Metti qui i domini che vuoi scansionare
+	domains := []string{"google.com", "github.com"} 
+	
+	numJobs := len(domains)
+	jobs := make(chan string, numJobs)
+	results := make(chan string, numJobs)
+	
+	var wg sync.WaitGroup
+	numWorkers := 3
+	
+	for w := 1; w <= numWorkers; w++ {
+		wg.Add(1)
+		go worker(w, jobs, results, &wg)
+	}
+	
+	for _, domain := range domains {
+		jobs <- domain
+	}
+	close(jobs)
+	
+	wg.Wait()
+	close(results)
+	
+	for res := range results {
+		fmt.Println(res)
+	}
+}
